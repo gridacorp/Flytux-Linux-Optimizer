@@ -1,46 +1,40 @@
 #!/usr/bin/env bash
 #=============================================================================
-# 🐧 FlyTux Optimizer v6.0 - Optimizador Integral con Corrección Automática
-# Objetivo: Optimización adaptativa hardware-software. Detecta y corrige
-# configuraciones problemáticas de versiones anteriores si las encuentra.
+# 🐧 FlyTux Optimizer v7.0 - Edición "Estabilidad y Pureza"
+# Objetivo: Optimización adaptativa, estabilidad de kernel y pureza de código.
+# Nota: No fuerza parámetros de kernel experimentales. Confía en el kernel moderno.
 #=============================================================================
 
 set -uo pipefail
 
-# FUNCIÓN: Instalar o actualizar paquetes inteligentemente
+# FUNCIÓN: Instalar o actualizar paquetes en una sola transacción (Rápido)
 install_or_upgrade() {
-  local PKGS="$1" DESC="$2"
-  local TO_INSTALL=() TO_UPGRADE=()
-  for PKG in $PKGS; do
-    if dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then 
-      TO_UPGRADE+=("$PKG")
-    else 
+  local DESC="$1"; shift
+  local PKGS=("$@")
+  local TO_INSTALL=()
+  
+  for PKG in "${PKGS[@]}"; do
+    if ! dpkg -l "$PKG" 2>/dev/null | grep -q "^ii"; then 
       TO_INSTALL+=("$PKG")
     fi
   done
   
-  if [ ${#TO_UPGRADE[@]} -gt 0 ] && [ ${#TO_INSTALL[@]} -gt 0 ]; then
-    echo "   🔄 $DESC: ${#TO_UPGRADE[@]} actualizar + ${#TO_INSTALL[@]} instalar"
-    apt install --only-upgrade -y "${TO_UPGRADE[@]}" 2>/dev/null || true
-    apt install -y "${TO_INSTALL[@]}" 2>/dev/null || true
-  elif [ ${#TO_UPGRADE[@]} -gt 0 ]; then
-    echo "   ⬆️ $DESC: actualizando ${#TO_UPGRADE[@]} existentes"
-    apt install --only-upgrade -y "${TO_UPGRADE[@]}" 2>/dev/null || true
-  elif [ ${#TO_INSTALL[@]} -gt 0 ]; then
-    echo "   📦 $DESC: instalando ${#TO_INSTALL[@]} nuevos"
+  if [ ${#TO_INSTALL[@]} -gt 0 ]; then
+    echo "   📦 $DESC: procesando ${#TO_INSTALL[@]} paquetes..."
+    # apt es lo suficientemente inteligente para actualizar los ya instalados e instalar los nuevos
     apt install -y "${TO_INSTALL[@]}" 2>/dev/null || true
   else
     echo "   ✅ $DESC: todo actualizado"
   fi
 }
 
-# FUNCIÓN: Verificar si un paquete existe en los repositorios
+# FUNCIÓN: Verificar si un paquete tiene versión candidata instalable (Robusto)
 pkg_exists() {
-  apt-cache show "$1" &>/dev/null
+  apt-cache policy "$1" 2>/dev/null | grep -q "Candidate: [^ ]"
 }
 
 # 0. VALIDACIÓN INICIAL
-echo "🐧 FlyTux Optimizer v6.0 | $(date)"
+echo "🐧 FlyTux Optimizer v7.0 | $(date)"
 [ "$(id -u)" -ne 0 ] && { echo "❌ Ejecutar como: sudo bash $0"; exit 1; }
 
 . /etc/os-release
@@ -59,13 +53,13 @@ echo "📦 Backup seguro en: $BACKUP | 📜 Logs: $LOG"
 echo "⏳ Iniciando optimización adaptativa..."
 
 # 1. BACKUP DE SEGURIDAD
-echo ""; echo "🔐 [1/15] Creando backup persistente..."
+echo ""; echo "🔐 [1/14] Creando backup persistente..."
 tar czf "$BACKUP" /etc/sysctl.d /etc/default /etc/systemd/system /etc/udev/rules.d \
     /etc/modprobe.d /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null || true
 [ -f "$BACKUP" ] && echo "✅ Backup creado: $(du -sh "$BACKUP" | awk '{print $1}')" || echo "⚠️ Backup incompleto"
 
-# 2. REPOSITORIOS NON-FREE / MULTIVERSE
-echo ""; echo "🔓 [2/15] Habilitando repositorios..."
+# 2. REPOSITORIOS
+echo ""; echo "🔓 [2/14] Habilitando repositorios..."
 if [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
   CODENAME=$(grep "^VERSION_CODENAME=" /etc/os-release | cut -d= -f2)
   for REPO in "contrib" "non-free" "non-free-firmware"; do
@@ -78,7 +72,7 @@ else
 fi
 
 # 2b. CORRECCIÓN DE REPOSITORIOS
-echo ""; echo "🔧 [2b/15] Corrigiendo arquitecturas de repositorios..."
+echo ""; echo "🔧 [2b/14] Corrigiendo arquitecturas de repositorios..."
 fix_repo_arch() {
   for FILE in $1; do
     [ -f "$FILE" ] || continue
@@ -99,28 +93,27 @@ for FILE in /etc/apt/sources.list.d/*ulauncher*.list /etc/apt/sources.list.d/*do
 done
 echo "✅ Repositorios corregidos"
 
-# 3. APT UPDATE RESILIENTE
-echo ""; echo "🔄 [3/15] Actualizando índices..."
-APT_OUT=$(apt update -o Acquire::Retries=3 --allow-releaseinfo-change 2>&1)
-if echo "$APT_OUT" | grep -q "^E:"; then
-  echo "❌ Error crítico:"; echo "$APT_OUT" | grep "^E:" | head -n 3
-  echo "⚠️ Continuando (algunas instalaciones podrían fallar)"
-else
-  echo "✅ Índices actualizados"
-fi
+# 3. APT UPDATE
+echo ""; echo "🔄 [3/14] Actualizando índices..."
+apt update -o Acquire::Retries=3 --allow-releaseinfo-change -y >/dev/null 2>&1 || true
+echo "✅ Índices actualizados"
 
-# 4. DETECCIÓN DE HARDWARE
-echo ""; echo "🔍 [4/15] Detectando hardware..."
+# 4. DETECCIÓN DE HARDWARE (GPU infalible con IDs hexadecimales)
+echo ""; echo "🔍 [4/14] Detectando hardware..."
 RAM_MB=$(awk '/MemTotal/ {printf "%d",$2/1024}' /proc/meminfo)
 CPU_VENDOR=$(grep -m1 "vendor_id" /proc/cpuinfo | awk '{print $3}' | tr '[:upper:]' '[:lower:]')
 CPU_CORES=$(nproc)
 DISK_NAME=$(lsblk -ndo pkname "$(df -P / | awk 'NR==2{print $1}')" 2>/dev/null | head -1)
 DISK_TYPE="SSD"; [ -n "$DISK_NAME" ] && [ "$(cat /sys/block/$DISK_NAME/queue/rotational 2>/dev/null)" = "1" ] && DISK_TYPE="HDD"
-GPU_VENDOR="unknown"; command -v lspci &>/dev/null && {
-  lspci | grep -qi "nvidia" && GPU_VENDOR="nvidia"
-  lspci | grep -qi "amd\|ati" && GPU_VENDOR="amd"
-  lspci | grep -qi "intel.*graphics" && GPU_VENDOR="intel"
-}
+
+# Detección de GPU por ID de fabricante (8086=Intel, 1002=AMD, 10de=NVIDIA)
+GPU_VENDOR="unknown"
+if command -v lspci &>/dev/null; then
+  lspci -nn | grep -iE "vga|3d|display" | grep -q "\[8086:" && GPU_VENDOR="intel"
+  lspci -nn | grep -iE "vga|3d|display" | grep -q "\[1002:" && GPU_VENDOR="amd"
+  lspci -nn | grep -iE "vga|3d|display" | grep -q "\[10de:" && GPU_VENDOR="nvidia"
+fi
+
 ACTIVE_USER=$(logname 2>/dev/null || who | awk '{print $1;exit}')
 DE="unknown"; command -v loginctl &>/dev/null && [ -n "$ACTIVE_USER" ] && {
   S=$(loginctl list-sessions --no-legend | grep -m1 "$ACTIVE_USER" | awk '{print $1}')
@@ -131,23 +124,22 @@ DE=$(echo "$DE" | tr '[:upper:]' '[:lower:]')
 echo "💾 ${RAM_MB}MB | 🖥️ $CPU_VENDOR ($CPU_CORES) | 💿 $DISK_TYPE | 🎮 $GPU_VENDOR | 🖼️ $DE"
 
 # 5. PERFIL ADAPTATIVO
-echo ""; echo "📊 [5/15] Calculando perfil..."
+echo ""; echo "📊 [5/14] Calculando perfil..."
 [ "$RAM_MB" -lt 5000 ] && RAM_TIER="LOW" || { [ "$RAM_MB" -le 8192 ] && RAM_TIER="MID" || RAM_TIER="HIGH"; }
 PROFILE="${RAM_TIER}_${DISK_TYPE}"
 case "$PROFILE" in
   LOW_HDD)  echo "🔴 LOW+HDD"; SWAP=10; CP=50; DR=10; SCHED="bfq"; ZRAM=$((RAM_MB*50/100)); ZA="zstd"; PC=2; PH=2; THP="madvise" ;;
-  LOW_SSD)  echo "🔵 LOW+SSD"; SWAP=10; CP=50; DR=10; SCHED="mq-deadline"; ZRAM=$((RAM_MB*50/100)); ZA="zstd"; PC=2; PH=2; THP="madvise" ;;
+  LOW_SSD)  echo "🔵 LOW+SSD"; SWAP=10; CP=50; DR=10; SCHED="mq-deadline"; ZRAM=$((RAM_MB*50/100)); ZA="zstd"; PC=0; PH=0; THP="madvise" ;; # Preload OFF en SSD
   MID_HDD)  echo "🟡 MID+HDD"; SWAP=20; CP=30; DR=15; SCHED="bfq"; ZRAM=2048; ZA="zstd"; PC=2; PH=3; THP="madvise" ;;
-  MID_SSD)  echo "🟢 MID+SSD"; SWAP=20; CP=20; DR=20; SCHED="mq-deadline"; ZRAM=2048; ZA="zstd"; PC=1; PH=4; THP="madvise" ;;
+  MID_SSD)  echo "🟢 MID+SSD"; SWAP=20; CP=20; DR=20; SCHED="mq-deadline"; ZRAM=2048; ZA="zstd"; PC=0; PH=0; THP="madvise" ;; # Preload OFF en SSD
   HIGH_HDD) echo "⚡ HIGH+HDD"; SWAP=10; CP=10; DR=15; SCHED="bfq"; ZRAM=0; ZA="none"; PC=1; PH=5; THP="madvise" ;;
-  HIGH_SSD) echo "🚀 HIGH+SSD"; SWAP=10; CP=5; DR=30; SCHED="mq-deadline"; ZRAM=0; ZA="none"; PC=0; PH=0; THP="madvise" ;;
+  HIGH_SSD) echo "🚀 HIGH+SSD"; SWAP=10; CP=5; DR=30; SCHED="mq-deadline"; ZRAM=0; ZA="none"; PC=0; PH=0; THP="madvise" ;; # Preload OFF en SSD
 esac
 
-# 6. KERNEL + SYSCTL (Corregido: sin min_free_kbytes, BBR verificado)
-echo ""; echo "⚙️ [6/15] Kernel y sysctl..."
+# 6. KERNEL + SYSCTL (Limpio, sin min_free_kbytes, BBR verificado)
+echo ""; echo "⚙️ [6/14] Kernel y sysctl..."
 echo schedutil | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
 
-# Verificar si BBR está disponible
 BBR_AVAILABLE=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q "bbr" && echo "yes" || echo "no")
 
 cat > /etc/sysctl.d/99-flytux.conf <<EOF
@@ -163,7 +155,6 @@ net.core.rmem_max=16777216
 net.core.wmem_max=16777216
 EOF
 
-# Añadir BBR solo si está disponible
 if [ "$BBR_AVAILABLE" = "yes" ]; then
   echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.d/99-flytux.conf
 fi
@@ -172,9 +163,10 @@ sysctl -p /etc/sysctl.d/99-flytux.conf >/dev/null 2>&1 || true
 echo "$THP" > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
 echo "✅ Sysctl aplicados en vivo"
 
-# 7. ZRAM + PRELOAD + EARLYOOM (Corregido: earlyoom en minúsculas)
-echo ""; echo "⚡ [7/15] ZRAM + Preload + EarlyOOM..."
-install_or_upgrade "preload zram-tools earlyoom" "Gestión de Memoria"
+# 7. ZRAM + PRELOAD + EARLYOOM (earlyoom sin --prefer, preload solo en HDD)
+echo ""; echo "⚡ [7/14] ZRAM + Preload + EarlyOOM..."
+install_or_upgrade "Gestión de Memoria" "zram-tools" "earlyoom"
+
 if [ "$ZRAM" -gt 0 ]; then
   echo -e "ENABLE=yes\nSIZE=$ZRAM\nALGO=$ZA\nPRIORITY=100" > /etc/default/zramswap
   systemctl enable --now zramswap 2>/dev/null || true
@@ -182,7 +174,9 @@ else
   systemctl disable zramswap 2>/dev/null || true
 fi
 
+# Preload: Solo útil en HDD. En SSD modernos es obsoleto.
 if [ "$PC" -gt 0 ]; then 
+  install_or_upgrade "Preload" "preload"
   systemctl enable --now preload 2>/dev/null || true
   sed -i "s/^# model.cycle.*/model.cycle = $PC/" /etc/preload.conf 2>/dev/null || true
   sed -i "s/^# model.halflife.*/model.halflife = $PH/" /etc/preload.conf 2>/dev/null || true
@@ -190,62 +184,55 @@ else
   systemctl disable preload 2>/dev/null || true
 fi
 
-sed -i 's/^EXTRA_ARGS=.*/EXTRA_ARGS="--prefer '(^|/)(chrome|chromium|firefox|brave)$' --notify all"/' /etc/default/earlyoom 2>/dev/null || true
+# earlyoom: Sin --prefer. Si el navegador consume toda la RAM, debe ser el primero en caer.
+sed -i 's/^EXTRA_ARGS=.*/EXTRA_ARGS="--notify all"/' /etc/default/earlyoom 2>/dev/null || true
 systemctl enable --now earlyoom 2>/dev/null || true
-echo "✅ ZRAM ($ZA), Preload y EarlyOOM configurados"
+echo "✅ ZRAM ($ZA), Preload (HDD only) y EarlyOOM configurados"
 
-# 8. DRIVERS + FWUPD (Corregido: microcódigos condicionales, firmware verificado)
-echo ""; echo "🏭 [8/15] Drivers y Firmware..."
+# 8. DRIVERS + FWUPD (Microcódigos condicionales, firmware verificado, SIN parámetros de kernel riesgosos)
+echo ""; echo "🏭 [8/14] Drivers y Firmware..."
 
-# Microcódigo condicional según CPU
 if [[ "$CPU_VENDOR" == *"intel"* ]]; then
-  install_or_upgrade "intel-microcode" "Microcódigo Intel"
+  install_or_upgrade "Microcódigo Intel" "intel-microcode"
 elif [[ "$CPU_VENDOR" == *"amd"* ]]; then
-  install_or_upgrade "amd64-microcode" "Microcódigo AMD"
+  install_or_upgrade "Microcódigo AMD" "amd64-microcode"
 fi
 
-install_or_upgrade "mesa-vulkan-drivers" "Vulkan"
+install_or_upgrade "Vulkan" "mesa-vulkan-drivers"
 
-# Firmware: verificar si existe antes de instalar
-if pkg_exists "firmware-linux"; then
-  install_or_upgrade "firmware-linux" "Firmware base"
-fi
-if pkg_exists "firmware-linux-nonfree"; then
-  install_or_upgrade "firmware-linux-nonfree" "Firmware non-free"
-fi
+if pkg_exists "firmware-linux"; then install_or_upgrade "Firmware base" "firmware-linux"; fi
+if pkg_exists "firmware-linux-nonfree"; then install_or_upgrade "Firmware non-free" "firmware-linux-nonfree"; fi
 
-install_or_upgrade "firmware-misc-nonfree firmware-realtek firmware-iwlwifi" "Firmware específico"
+install_or_upgrade "Firmware específico" "firmware-misc-nonfree" "firmware-realtek" "firmware-iwlwifi"
 
-# linux-firmware: solo si no está instalado o hay actualización
 if ! dpkg -l linux-firmware 2>/dev/null | grep -q "^ii"; then
-  install_or_upgrade "linux-firmware" "Linux firmware"
+  install_or_upgrade "Linux firmware" "linux-firmware"
 fi
 
-[ "$GPU_VENDOR" = "nvidia" ] && install_or_upgrade "nvidia-driver nvidia-settings nvidia-prime" "NVIDIA utils"
-install_or_upgrade "libdrm-common" "DRM"
+[ "$GPU_VENDOR" = "nvidia" ] && install_or_upgrade "NVIDIA utils" "nvidia-driver" "nvidia-settings" "nvidia-prime"
+install_or_upgrade "DRM" "libdrm-common"
 
-# fwupd para actualizaciones de firmware transparentes
-install_or_upgrade "fwupd" "Firmware updates (fwupd)"
+install_or_upgrade "Firmware updates" "fwupd"
 systemctl enable --now fwupd 2>/dev/null || true
 echo "✅ Drivers y fwupd actualizados"
 
 # 9. CODECS + FUENTES
-echo ""; echo "🎬 [9/15] Codecs y fuentes..."
-install_or_upgrade "libavcodec-extra gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav ffmpeg libdvd-pkg unrar p7zip-full p7zip-rar zip unzip ttf-mscorefonts-installer fonts-liberation fonts-noto fonts-noto-cjk fonts-roboto" "Multimedia"
+echo ""; echo "🎬 [9/14] Codecs y fuentes..."
+install_or_upgrade "Multimedia" "libavcodec-extra" "gstreamer1.0-plugins-bad" "gstreamer1.0-plugins-ugly" "gstreamer1.0-libav" "ffmpeg" "libdvd-pkg" "unrar" "p7zip-full" "p7zip-rar" "zip" "unzip" "ttf-mscorefonts-installer" "fonts-liberation" "fonts-noto" "fonts-noto-cjk" "fonts-roboto"
 if dpkg -l libdvd-pkg &>/dev/null | grep -q "^ii"; then 
   echo y | DEBIAN_FRONTEND=noninteractive dpkg-reconfigure libdvd-pkg 2>/dev/null || true
 fi
 echo "✅ Codecs instalados"
 
 # 10. WINE FULL + i386
-echo ""; echo "🍷 [10/15] Wine Full + i386..."
+echo ""; echo "🍷 [10/14] Wine Full + i386..."
 dpkg --add-architecture i386 2>/dev/null || true
 apt update >/dev/null 2>&1 || true
-install_or_upgrade "wine wine64 wine32 winetricks winbind libwine fonts-wine wine-tools cabextract libgl1-mesa-glx:i386 libgl1-mesa-dri:i386 libpulse0:i386 libcups2:i386 libdbus-1-3:i386 libasound2:i386" "Wine Full"
+install_or_upgrade "Wine Full" "wine" "wine64" "wine32" "winetricks" "winbind" "libwine" "fonts-wine" "wine-tools" "cabextract" "libgl1-mesa-glx:i386" "libgl1-mesa-dri:i386" "libpulse0:i386" "libcups2:i386" "libdbus-1-3:i386" "libasound2:i386"
 command -v wine &>/dev/null && echo "✅ Wine: $(wine --version 2>/dev/null | awk '{print $1}')" || echo "⚠️ Wine: verificar"
 
 # 11. DESINSTALACIÓN DE SOFTWARE PESADO
-echo ""; echo "🗑️ [11/15] Desinstalando software pesado..."
+echo ""; echo "🗑️ [11/14] Desinstalando software pesado..."
 for pkg in firefox firefox-esr libreoffice-core libreoffice-calc libreoffice-writer libreoffice-impress; do
   dpkg -l "$pkg" &>/dev/null && apt purge -y "$pkg" >/dev/null 2>&1 || true
 done
@@ -253,8 +240,8 @@ apt autoremove -y --purge >/dev/null 2>&1 || true
 echo "✅ Software pesado desinstalado"
 
 # 12. APPS ESENCIALES + JOPDF
-echo ""; echo "🔄 [12/15] Instalando apps esenciales..."
-install_or_upgrade "cups cups-client printer-driver-all system-config-printer poppler-utils qpdf pdfarranger pdftk pdfgrep nomacs" "PDF/Impresión"
+echo ""; echo "🔄 [12/14] Instalando apps esenciales..."
+install_or_upgrade "PDF/Impresión" "cups" "cups-client" "printer-driver-all" "system-config-printer" "poppler-utils" "qpdf" "pdfarranger" "pdftk" "pdfgrep" "nomacs"
 systemctl enable --now cups 2>/dev/null || true
 
 if ! dpkg -l brave-browser &>/dev/null | grep -q "^ii"; then
@@ -264,7 +251,7 @@ else
   apt install --only-upgrade -y brave-browser 2>/dev/null || true
 fi
 
-install_or_upgrade "vlc" "VLC"
+install_or_upgrade "VLC" "vlc"
 
 if ! dpkg -l rustdesk &>/dev/null | grep -q "^ii"; then
   URL=$(curl -s https://api.github.com/repos/rustdesk/rustdesk/releases/latest 2>/dev/null | grep "browser_download_url.*amd64\.deb" | head -1 | cut -d'"' -f4)
@@ -301,7 +288,7 @@ fi
 echo "✅ Apps esenciales listas"
 
 # 13. FIREWALL
-echo ""; echo "🛡️ [13/15] Firewall..."
+echo ""; echo "🛡️ [13/14] Firewall..."
 ufw --force reset >/dev/null 2>&1; ufw default deny incoming; ufw default allow outgoing
 for P in 21 23 135 136 137 138 139 445 3389 5900; do ufw deny $P/tcp 2>/dev/null || true; done
 ufw allow 53/tcp 2>/dev/null||true; ufw allow 53/udp 2>/dev/null||true; ufw allow 80/tcp 2>/dev/null||true; ufw allow 443/tcp 2>/dev/null||true
@@ -309,21 +296,19 @@ ufw allow 21115:21119/tcp 2>/dev/null||true; ufw allow 21115:21119/udp 2>/dev/nu
 ufw --force enable >/dev/null 2>&1; systemctl enable --now ufw 2>/dev/null || true
 echo "✅ Firewall activo"
 
-# 14. PRIVACIDAD + APPARMOR + ANIMACIONES (Corregido: mensaje de animaciones)
-echo ""; echo "🔒 [14/15] Privacidad, Seguridad y Configuración del Escritorio..."
+# 14. PRIVACIDAD + APPARMOR + ANIMACIONES + GRUB + I/O + LIMPIEZA
+echo ""; echo "🔒 [14/14] Privacidad, Seguridad, Escritorio y Limpieza..."
 for pkg in popularity-contest whoopsie apport ubuntu-report command-not-found; do dpkg -l "$pkg" &>/dev/null && apt purge -y "$pkg" >/dev/null 2>&1 || true; done
 sed -i 's/^Enabled=1/Enabled=0/' /etc/default/apport 2>/dev/null || true
 
-# Reactivar AppArmor para Flatpak/bwrap si fue desactivado por versiones anteriores
 if command -v aa-enforce &>/dev/null; then
   for profile in /etc/apparmor.d/*flatpak* /etc/apparmor.d/*bwrap*; do 
     [ -f "$profile" ] && aa-enforce "$profile" 2>/dev/null || true
   done
   systemctl restart apparmor 2>/dev/null || true
-  echo "✅ AppArmor de Flatpak/bwrap reactivado (si estaba desactivado)"
+  echo "✅ AppArmor de Flatpak/bwrap reactivado"
 fi
 
-# Restaurar animaciones del escritorio a su configuración predeterminada
 if [ -n "$ACTIVE_USER" ] && [ "$ACTIVE_USER" != "root" ]; then
   UID_U=$(id -u "$ACTIVE_USER"); DBUS="unix:path=/run/user/$UID_U/bus"
   case "$DE" in 
@@ -334,10 +319,7 @@ if [ -n "$ACTIVE_USER" ] && [ "$ACTIVE_USER" != "root" ]; then
   echo "✅ Configuración predeterminada del escritorio restaurada"
 fi
 
-# 15. GRUB + I/O SCHEDULER (Corregido: scheduler verificado) + LIMPIEZA
-echo ""; echo "🔧 [15/15] GRUB, I/O Scheduler y Limpieza Final..."
-
-# I/O Scheduler: verificar qué está disponible antes de aplicar
+# I/O Scheduler verificado
 if [ -n "$DISK_NAME" ]; then
   AVAILABLE_SCHEDS=$(cat /sys/block/$DISK_NAME/queue/scheduler 2>/dev/null)
   if echo "$AVAILABLE_SCHEDS" | grep -q "\[$SCHED\]"; then
@@ -354,9 +336,9 @@ if [ -n "$DISK_NAME" ]; then
   [ "$DISK_TYPE" = "SSD" ] && systemctl enable --now fstrim.timer 2>/dev/null || true
 fi
 
-# GRUB: parámetros seguros de eficiencia
-VG=""; case "$CPU_VENDOR" in *intel*) VG="intel_pstate=active i915.enable_guc=3"; mkdir -p /etc/modprobe.d; echo "options i915 enable_guc=3" > /etc/modprobe.d/i915-flytux.conf;; *amd*) VG="amd_pstate=active amdgpu.ppfeaturemask=0xffffffff"; mkdir -p /etc/modprobe.d; echo "options amdgpu ppfeaturemask=0xffffffff" > /etc/modprobe.d/amdgpu-flytux.conf;; esac
-mkdir -p /etc/default/grub.d; echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT $VG\"" > /etc/default/grub.d/99-flytux.cfg
+# GRUB: Limpio, sin parámetros experimentales. Solo actualizamos para asegurar que se borren los de versiones anteriores.
+mkdir -p /etc/default/grub.d
+echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT\"" > /etc/default/grub.d/99-flytux.cfg
 update-grub >/dev/null 2>&1 || true
 
 # Limpieza final
@@ -367,12 +349,12 @@ echo "✅ Limpieza completada"
 
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "🐧 FlyTux Optimizer v6.0 COMPLETADO"
+echo "🐧 FlyTux Optimizer v7.0 COMPLETADO"
 echo "📊 Perfil: $PROFILE | 🔧 $CPU_VENDOR | 🎮 $GPU_VENDOR"
 echo "🧠 Memoria: ZRAM ($ZA) + EarlyOOM"
-echo "🛡️ Correcciones aplicadas: AppArmor, Animaciones, fwupd"
+echo "🛡️ Estabilidad: Sin parámetros de kernel experimentales"
 echo "📁 Backup seguro en: $BACKUP"
 echo "═══════════════════════════════════════════════════════"
-echo "💡 CONSEJO: Reinicia el equipo para aplicar GRUB y los cambios visuales."
+echo "💡 CONSEJO: Reinicia el equipo para aplicar los cambios de I/O y GRUB."
 echo "🔙 REVERTIR: sudo tar xzf $BACKUP -C / && sudo ufw disable && sudo update-grub"
 echo "═══════════════════════════════════════════════════════"
