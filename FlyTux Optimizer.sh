@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #=============================================================================
-# 🐧 FlyTux Optimizer v5.0 - Edición "Reparadora y Optimizadora"
-# Objetivo: Repara daños de scripts anteriores, optimiza 4GB RAM, control total.
+# 🐧 FlyTux Optimizer v6.0 - Optimizador Integral con Corrección Automática
+# Objetivo: Optimización adaptativa hardware-software. Detecta y corrige
+# configuraciones problemáticas de versiones anteriores si las encuentra.
 #=============================================================================
 
 set -uo pipefail
@@ -33,8 +34,13 @@ install_or_upgrade() {
   fi
 }
 
+# FUNCIÓN: Verificar si un paquete existe en los repositorios
+pkg_exists() {
+  apt-cache show "$1" &>/dev/null
+}
+
 # 0. VALIDACIÓN INICIAL
-echo "🐧 FlyTux Optimizer v5.0 | $(date)"
+echo "🐧 FlyTux Optimizer v6.0 | $(date)"
 [ "$(id -u)" -ne 0 ] && { echo "❌ Ejecutar como: sudo bash $0"; exit 1; }
 
 . /etc/os-release
@@ -50,7 +56,7 @@ mkdir -p /var/backups
 exec > >(tee -a "$LOG") 2>&1
 
 echo "📦 Backup seguro en: $BACKUP | 📜 Logs: $LOG"
-echo "⏳ Iniciando reparación y optimización..."
+echo "⏳ Iniciando optimización adaptativa..."
 
 # 1. BACKUP DE SEGURIDAD
 echo ""; echo "🔐 [1/15] Creando backup persistente..."
@@ -137,30 +143,38 @@ case "$PROFILE" in
   HIGH_SSD) echo "🚀 HIGH+SSD"; SWAP=10; CP=5; DR=30; SCHED="mq-deadline"; ZRAM=0; ZA="none"; PC=0; PH=0; THP="madvise" ;;
 esac
 
-# 6. KERNEL + SYSCTL
+# 6. KERNEL + SYSCTL (Corregido: sin min_free_kbytes, BBR verificado)
 echo ""; echo "⚙️ [6/15] Kernel y sysctl..."
 echo schedutil | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null || true
+
+# Verificar si BBR está disponible
+BBR_AVAILABLE=$(sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q "bbr" && echo "yes" || echo "no")
+
 cat > /etc/sysctl.d/99-flytux.conf <<EOF
 vm.swappiness=$SWAP
 vm.vfs_cache_pressure=$CP
 vm.dirty_ratio=$DR
 vm.dirty_background_ratio=$((DR/2))
 vm.page-cluster=0
-vm.min_free_kbytes=$((RAM_MB*2048/100))
 net.core.somaxconn=4096
 net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_congestion_control=bbr
 net.core.netdev_max_backlog=4096
 net.core.rmem_max=16777216
 net.core.wmem_max=16777216
 EOF
+
+# Añadir BBR solo si está disponible
+if [ "$BBR_AVAILABLE" = "yes" ]; then
+  echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.d/99-flytux.conf
+fi
+
 sysctl -p /etc/sysctl.d/99-flytux.conf >/dev/null 2>&1 || true
 echo "$THP" > /sys/kernel/mm/transparent_hugepage/enabled 2>/dev/null || true
 echo "✅ Sysctl aplicados en vivo"
 
-# 7. ZRAM + PRELOAD + EARLYOOM
+# 7. ZRAM + PRELOAD + EARLYOOM (Corregido: earlyoom en minúsculas)
 echo ""; echo "⚡ [7/15] ZRAM + Preload + EarlyOOM..."
-install_or_upgrade "preload zram-tools earlyOOM" "Gestión de Memoria"
+install_or_upgrade "preload zram-tools earlyoom" "Gestión de Memoria"
 if [ "$ZRAM" -gt 0 ]; then
   echo -e "ENABLE=yes\nSIZE=$ZRAM\nALGO=$ZA\nPRIORITY=100" > /etc/default/zramswap
   systemctl enable --now zramswap 2>/dev/null || true
@@ -180,14 +194,37 @@ sed -i 's/^EXTRA_ARGS=.*/EXTRA_ARGS="--prefer '(^|/)(chrome|chromium|firefox|bra
 systemctl enable --now earlyoom 2>/dev/null || true
 echo "✅ ZRAM ($ZA), Preload y EarlyOOM configurados"
 
-# 8. DRIVERS + FWUPD (Parche de Integración de Hardware)
+# 8. DRIVERS + FWUPD (Corregido: microcódigos condicionales, firmware verificado)
 echo ""; echo "🏭 [8/15] Drivers y Firmware..."
-install_or_upgrade "intel-microcode amd64-microcode firmware-linux mesa-vulkan-drivers" "Oficiales"
-[ "$GPU_VENDOR" = "nvidia" ] && install_or_upgrade "nvidia-driver nvidia-settings nvidia-prime" "NVIDIA utils"
-install_or_upgrade "firmware-linux-nonfree firmware-misc-nonfree firmware-realtek firmware-iwlwifi" "Non-free"
-install_or_upgrade "linux-firmware libdrm-common" "Alternativos"
 
-# PARCHE: Asegurar fwupd para actualizaciones de firmware transparentes (Estilo Mac)
+# Microcódigo condicional según CPU
+if [[ "$CPU_VENDOR" == *"intel"* ]]; then
+  install_or_upgrade "intel-microcode" "Microcódigo Intel"
+elif [[ "$CPU_VENDOR" == *"amd"* ]]; then
+  install_or_upgrade "amd64-microcode" "Microcódigo AMD"
+fi
+
+install_or_upgrade "mesa-vulkan-drivers" "Vulkan"
+
+# Firmware: verificar si existe antes de instalar
+if pkg_exists "firmware-linux"; then
+  install_or_upgrade "firmware-linux" "Firmware base"
+fi
+if pkg_exists "firmware-linux-nonfree"; then
+  install_or_upgrade "firmware-linux-nonfree" "Firmware non-free"
+fi
+
+install_or_upgrade "firmware-misc-nonfree firmware-realtek firmware-iwlwifi" "Firmware específico"
+
+# linux-firmware: solo si no está instalado o hay actualización
+if ! dpkg -l linux-firmware 2>/dev/null | grep -q "^ii"; then
+  install_or_upgrade "linux-firmware" "Linux firmware"
+fi
+
+[ "$GPU_VENDOR" = "nvidia" ] && install_or_upgrade "nvidia-driver nvidia-settings nvidia-prime" "NVIDIA utils"
+install_or_upgrade "libdrm-common" "DRM"
+
+# fwupd para actualizaciones de firmware transparentes
 install_or_upgrade "fwupd" "Firmware updates (fwupd)"
 systemctl enable --now fwupd 2>/dev/null || true
 echo "✅ Drivers y fwupd actualizados"
@@ -272,21 +309,21 @@ ufw allow 21115:21119/tcp 2>/dev/null||true; ufw allow 21115:21119/udp 2>/dev/nu
 ufw --force enable >/dev/null 2>&1; systemctl enable --now ufw 2>/dev/null || true
 echo "✅ Firewall activo"
 
-# 14. PRIVACIDAD + APPARMOR (Parche de Seguridad) + ANIMACIONES (Parche Visual)
-echo ""; echo "🔒 [14/15] Privacidad, Seguridad y Experiencia Visual..."
+# 14. PRIVACIDAD + APPARMOR + ANIMACIONES (Corregido: mensaje de animaciones)
+echo ""; echo "🔒 [14/15] Privacidad, Seguridad y Configuración del Escritorio..."
 for pkg in popularity-contest whoopsie apport ubuntu-report command-not-found; do dpkg -l "$pkg" &>/dev/null && apt purge -y "$pkg" >/dev/null 2>&1 || true; done
 sed -i 's/^Enabled=1/Enabled=0/' /etc/default/apport 2>/dev/null || true
 
-# PARCHE: Reactivar AppArmor para Flatpak/bwrap (El script v1.0 los desactivó)
+# Reactivar AppArmor para Flatpak/bwrap si fue desactivado por versiones anteriores
 if command -v aa-enforce &>/dev/null; then
   for profile in /etc/apparmor.d/*flatpak* /etc/apparmor.d/*bwrap*; do 
     [ -f "$profile" ] && aa-enforce "$profile" 2>/dev/null || true
   done
   systemctl restart apparmor 2>/dev/null || true
-  echo "✅ AppArmor de Flatpak/bwrap reactivado (Parche de seguridad)"
+  echo "✅ AppArmor de Flatpak/bwrap reactivado (si estaba desactivado)"
 fi
 
-# PARCHE: Reactivar animaciones del escritorio (El script v1.0 las desactivó, arruinando la fluidez)
+# Restaurar animaciones del escritorio a su configuración predeterminada
 if [ -n "$ACTIVE_USER" ] && [ "$ACTIVE_USER" != "root" ]; then
   UID_U=$(id -u "$ACTIVE_USER"); DBUS="unix:path=/run/user/$UID_U/bus"
   case "$DE" in 
@@ -294,15 +331,35 @@ if [ -n "$ACTIVE_USER" ] && [ "$ACTIVE_USER" != "root" ]; then
     *kde*|*plasma*) runuser -u "$ACTIVE_USER" -- bash -c 'kwriteconfig5 --file kwinrc --group Compositing --key Enabled true 2>/dev/null||true';; 
     *xfce*) runuser -u "$ACTIVE_USER" -- bash -c 'xfconf-query -c xfwm4 -p /general/use_compositing -s true 2>/dev/null||true';; 
   esac
-  echo "✅ Animaciones del escritorio reactivadas (Parche visual Mac-like)"
+  echo "✅ Configuración predeterminada del escritorio restaurada"
 fi
 
-# 15. GRUB + LIMPIEZA + FINALIZACIÓN
-echo ""; echo "🔧 [15/15] GRUB y Limpieza Final..."
+# 15. GRUB + I/O SCHEDULER (Corregido: scheduler verificado) + LIMPIEZA
+echo ""; echo "🔧 [15/15] GRUB, I/O Scheduler y Limpieza Final..."
+
+# I/O Scheduler: verificar qué está disponible antes de aplicar
+if [ -n "$DISK_NAME" ]; then
+  AVAILABLE_SCHEDS=$(cat /sys/block/$DISK_NAME/queue/scheduler 2>/dev/null)
+  if echo "$AVAILABLE_SCHEDS" | grep -q "\[$SCHED\]"; then
+    echo "✅ Scheduler $SCHED ya está activo"
+  elif echo "$AVAILABLE_SCHEDS" | grep -q "$SCHED"; then
+    echo "$SCHED" > "/sys/block/$DISK_NAME/queue/scheduler" 2>/dev/null || true
+    mkdir -p /etc/udev/rules.d
+    echo "ACTION==\"add|change\", KERNEL==\"$DISK_NAME\", ATTR{queue/scheduler}=\"$SCHED\"" > /etc/udev/rules.d/60-flytux-io.rules
+    udevadm control --reload-rules 2>/dev/null || true
+    echo "✅ Scheduler aplicado: $SCHED"
+  else
+    echo "⚠️ Scheduler $SCHED no disponible. Usando configuración del kernel."
+  fi
+  [ "$DISK_TYPE" = "SSD" ] && systemctl enable --now fstrim.timer 2>/dev/null || true
+fi
+
+# GRUB: parámetros seguros de eficiencia
 VG=""; case "$CPU_VENDOR" in *intel*) VG="intel_pstate=active i915.enable_guc=3"; mkdir -p /etc/modprobe.d; echo "options i915 enable_guc=3" > /etc/modprobe.d/i915-flytux.conf;; *amd*) VG="amd_pstate=active amdgpu.ppfeaturemask=0xffffffff"; mkdir -p /etc/modprobe.d; echo "options amdgpu ppfeaturemask=0xffffffff" > /etc/modprobe.d/amdgpu-flytux.conf;; esac
 mkdir -p /etc/default/grub.d; echo "GRUB_CMDLINE_LINUX_DEFAULT=\"\$GRUB_CMDLINE_LINUX_DEFAULT $VG\"" > /etc/default/grub.d/99-flytux.cfg
 update-grub >/dev/null 2>&1 || true
 
+# Limpieza final
 apt full-upgrade -y >/dev/null 2>&1 || true; apt autoremove -y --purge >/dev/null 2>&1 || true
 journalctl --vacuum-size=50M --vacuum-time=7d 2>/dev/null || true
 rm -rf /tmp/* /var/tmp/* /var/cache/apt/archives/*.deb 2>/dev/null || true
@@ -310,12 +367,12 @@ echo "✅ Limpieza completada"
 
 echo ""
 echo "═══════════════════════════════════════════════════════"
-echo "🐧 FlyTux Optimizer v5.0 COMPLETADO"
+echo "🐧 FlyTux Optimizer v6.0 COMPLETADO"
 echo "📊 Perfil: $PROFILE | 🔧 $CPU_VENDOR | 🎮 $GPU_VENDOR"
 echo "🧠 Memoria: ZRAM ($ZA) + EarlyOOM"
-echo "🛡️ Parches aplicados: AppArmor, Animaciones, fwupd"
+echo "🛡️ Correcciones aplicadas: AppArmor, Animaciones, fwupd"
 echo "📁 Backup seguro en: $BACKUP"
 echo "═══════════════════════════════════════════════════════"
-echo "💡 CONSEJO: Reinicia el equipo para aplicar GRUB y los parches visuales."
+echo "💡 CONSEJO: Reinicia el equipo para aplicar GRUB y los cambios visuales."
 echo "🔙 REVERTIR: sudo tar xzf $BACKUP -C / && sudo ufw disable && sudo update-grub"
 echo "═══════════════════════════════════════════════════════"
