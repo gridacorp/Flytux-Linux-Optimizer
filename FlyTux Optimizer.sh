@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #=============================================================================
-# 🐧 FlyTux Optimizer v15.2 - Edición "Producción Definitiva"
-# Objetivo: Optimización adaptativa profesional con verificación real de
-# servicios vía systemd, y manejo seguro de Secure Boot + NVIDIA.
+# 🐧 FlyTux Optimizer v15.1 - Edición "Fuentes Estables + Detección Robusta"
+# Objetivo: Optimización adaptativa profesional con detección precisa de
+# hardware usando /sys, /proc, dmidecode, glxinfo y tablas oficiales.
 #=============================================================================
 
 set -Eeuo pipefail
@@ -22,19 +22,16 @@ pkg_exists() {
   apt-cache madison "$1" 2>/dev/null | grep -q '|'
 }
 
-# FUNCIÓN: Habilitar servicio SOLO si systemd lo reconoce como unidad válida
+# FUNCIÓN: Habilitar servicio solo si existe físicamente
 enable_service() {
   local SERVICE="$1"
-  # Verificar con systemd que la unidad existe (más fiable que buscar archivos)
-  if systemctl list-unit-files "${SERVICE}.service" 2>/dev/null | grep -q "${SERVICE}.service"; then
+  if [ -f "/lib/systemd/system/$SERVICE.service" ] || [ -f "/etc/systemd/system/$SERVICE.service" ]; then
     systemctl enable --now "$SERVICE" 2>/dev/null || true
-  else
-    echo "   ℹ️ Servicio '$SERVICE' no encontrado en systemd (omitido)."
   fi
 }
 
 # 0. VALIDACIÓN INICIAL
-echo "🐧 FlyTux Optimizer v15.2 | $(date)"
+echo "🐧 FlyTux Optimizer v15.1 | $(date)"
 [ "$(id -u)" -ne 0 ] && { echo "❌ Ejecutar como: sudo bash $0"; exit 1; }
 
 . /etc/os-release
@@ -141,10 +138,12 @@ HAS_AVX512=$(echo "$CPU_FLAGS" | grep -qw "avx512f" && echo "yes" || echo "no")
 # CPU HÍBRIDA: Topología real con fallback a tablas de modelos Intel
 IS_HYBRID_CPU="no"
 if [ -d /sys/devices/system/cpu ]; then
+  # Método 1: Topología vía cpu_capacity (ARM y kernels modernos x86)
   CAPACITIES=$(cat /sys/devices/system/cpu/cpu*/cpu_capacity 2>/dev/null | sort -u | wc -l)
   [ "$CAPACITIES" -gt 1 ] && IS_HYBRID_CPU="yes"
 fi
 
+# Método 2: Fallback a modelos Intel conocidos con E-Cores (tablas oficiales)
 if [ "$IS_HYBRID_CPU" = "no" ] && [[ "$CPU_VENDOR" == *"intel"* ]] && [ "$CPU_FAMILY" = "6" ]; then
   case "$CPU_MODEL_NUM" in
     151|154|155) IS_HYBRID_CPU="yes" ;; # Alder Lake (12th gen)
@@ -154,7 +153,7 @@ if [ "$IS_HYBRID_CPU" = "no" ] && [[ "$CPU_VENDOR" == *"intel"* ]] && [ "$CPU_FA
   esac
 fi
 
-# Generación CPU vía tablas oficiales
+# Generación CPU vía tablas oficiales (NO lineales)
 CPU_GEN="unknown"
 if [[ "$CPU_VENDOR" == *"intel"* ]] && [ "$CPU_FAMILY" = "6" ]; then
   case "$CPU_MODEL_NUM" in
@@ -193,7 +192,7 @@ if [ "$DISK_TYPE" != "HDD" ] && [ -n "$DISK_NAME" ]; then
   fi
 fi
 
-# RAM ECC: EDAC primero, luego dmidecode como fallback
+# RAM ECC: EDAC primero (preciso), luego dmidecode como fallback
 HAS_ECC="no"
 if [ -d /sys/devices/system/edac/mc ]; then
   if ls /sys/devices/system/edac/mc/mc*/ce_count 2>/dev/null | head -1 | grep -q "ce_count"; then
@@ -215,7 +214,7 @@ if command -v lspci &>/dev/null; then
   lspci -nn | grep -iE "vga|3d|display" | grep -q "\[1002:" && GPU_VENDORS="${GPU_VENDORS}amd,"
   lspci -nn | grep -iE "vga|3d|display" | grep -q "\[10de:" && GPU_VENDORS="${GPU_VENDORS}nvidia,"
   
-  # Método 1: glxinfo (GPU que realmente renderiza)
+  # Método 1: glxinfo (GPU que realmente renderiza en X11/Wayland)
   if command -v glxinfo &>/dev/null; then
     RENDERER=$(glxinfo 2>/dev/null | grep "OpenGL renderer string" | tr '[:upper:]' '[:lower:]')
     if echo "$RENDERER" | grep -q "intel"; then PRIMARY_GPU_DRIVER="i915"
@@ -224,7 +223,7 @@ if command -v lspci &>/dev/null; then
     fi
   fi
   
-  # Método 2: vulkaninfo (alternativa)
+  # Método 2: vulkaninfo (alternativa si glxinfo falla)
   if [ "$PRIMARY_GPU_DRIVER" = "unknown" ] && command -v vulkaninfo &>/dev/null; then
     DEVICE=$(vulkaninfo 2>/dev/null | grep "deviceName" | head -n 1 | tr '[:upper:]' '[:lower:]')
     if echo "$DEVICE" | grep -q "intel"; then PRIMARY_GPU_DRIVER="i915"
@@ -244,7 +243,7 @@ if command -v lspci &>/dev/null; then
     done
   fi
   
-  # Método 4: Fallback a lspci
+  # Método 4: Fallback final a lspci
   if [ "$PRIMARY_GPU_DRIVER" = "unknown" ]; then
     PRIMARY_GPU_DRIVER=$(lspci -nnk | grep -i "vga compatible controller" -A 2 | grep "Kernel driver in use:" | awk '{print $4}' | tr '[:upper:]' '[:lower:]' | head -n 1)
   fi
@@ -291,7 +290,7 @@ ZRAM_SIZE=$((RAM_MB * 50 / 100))
 
 echo "✅ Perfil: $RAM_TIER + $DISK_TYPE | ZRAM: $USE_ZRAM | EarlyOOM: $USE_EARLYOOM | Preload: $USE_PRELOAD"
 
-# 5. KERNEL + SYSCTL
+# 5. KERNEL + SYSCTL (Solo red, memoria delegada al kernel)
 echo ""; echo "⚙️ [5/12] Ajustes de kernel (No intrusivos)..."
 if [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors ]; then
   if grep -q "schedutil" /sys/devices/system/cpu/cpu0/cpufreq/scaling_available_governors; then
@@ -315,7 +314,7 @@ echo "✅ Sysctl de red aplicados. Gestión de memoria delegada al kernel."
 # 6. APLICACIÓN DEL MOTOR DE PERFILES + GESTIÓN DE ENERGÍA
 echo ""; echo "⚡ [6/12] Aplicando optimizaciones de perfil y energía..."
 
-# ZRAM: Preferir systemd-zram-generator (nativo)
+# ZRAM: Preferir systemd-zram-generator (nativo), luego zram-tools
 if [ "$USE_ZRAM" == "yes" ]; then
   if [ -b /dev/zram0 ] || [ -d /sys/block/zram0 ]; then
     echo "ℹ️ ZRAM ya activo."
@@ -332,12 +331,14 @@ if [ "$USE_ZRAM" == "yes" ]; then
   fi
 fi
 
+# EarlyOOM
 if [ "$USE_EARLYOOM" == "yes" ]; then
   install_or_upgrade "EarlyOOM" "earlyoom"
   sed -i 's/^EXTRA_ARGS=.*/EXTRA_ARGS="--notify all"/' /etc/default/earlyoom 2>/dev/null || true
   enable_service "earlyoom"
 fi
 
+# Preload (solo HDD)
 if [ "$USE_PRELOAD" == "yes" ] && [ "$DISK_TYPE" == "HDD" ]; then
   install_or_upgrade "Preload" "preload"
   enable_service "preload"
@@ -345,6 +346,7 @@ if [ "$USE_PRELOAD" == "yes" ] && [ "$DISK_TYPE" == "HDD" ]; then
   sed -i "s/^# model.halflife.*/model.halflife = 2/" /etc/preload.conf 2>/dev/null || true
 fi
 
+# Gestión de Energía (Laptop vs Desktop)
 if [ "$IS_LAPTOP" == "yes" ]; then
   if [[ "$ID" == "debian" ]] || [[ "$ID_LIKE" == *"debian"* ]]; then
     install_or_upgrade "Gestión de Energía (TLP)" "tlp" "tlp-rdw"
@@ -354,10 +356,12 @@ if [ "$IS_LAPTOP" == "yes" ]; then
   fi
 fi
 
+# NVMe específico
 if [ "$DISK_TYPE" == "NVME" ]; then
   install_or_upgrade "Herramientas NVMe" "nvme-cli"
 fi
 
+# TRIM solo si soportado
 if [ "$SUPPORTS_TRIM" == "yes" ]; then
   enable_service "fstrim.timer"
   echo "✅ TRIM activado (soportado por el disco)."
@@ -365,8 +369,13 @@ fi
 
 echo "✅ Perfil de rendimiento y energía aplicado."
 
-# 7. MOTOR DE DRIVERS INTELIGENTE (CON MANEJO SEGURO DE SECURE BOOT)
+# 7. MOTOR DE DRIVERS INTELIGENTE
 echo ""; echo "🏭 [7/12] Motor de selección de drivers..."
+
+# Advertencia Secure Boot + NVIDIA
+if [[ "$GPU_VENDORS" == *"nvidia"* ]] && [ "$SECURE_BOOT" == "enabled" ]; then
+  echo "⚠️ ADVERTENCIA: Secure Boot activado. NVIDIA puede requerir firma manual o MOK enrollment."
+fi
 
 # Microcódigo (solo si no está instalado)
 if [[ "$CPU_VENDOR" == *"intel"* ]] && ! dpkg -l intel-microcode &>/dev/null | grep -q "^ii"; then
@@ -376,36 +385,14 @@ if [[ "$CPU_VENDOR" == *"amd"* ]] && ! dpkg -l amd64-microcode &>/dev/null | gre
   install_or_upgrade "Microcódigo AMD" "amd64-microcode"
 fi
 
-# NVIDIA: Manejo seguro con Secure Boot
+# NVIDIA: Priorizar recomendación de distro
 if [[ "$GPU_VENDORS" == *"nvidia"* ]]; then
   NVIDIA_PKG="nvidia-driver"
   if command -v ubuntu-drivers &>/dev/null; then
     REC_DRIVER=$(ubuntu-drivers devices 2>/dev/null | grep "recommended" | awk '{print $3}')
     [ -n "$REC_DRIVER" ] && NVIDIA_PKG="$REC_DRIVER"
   fi
-  
-  if [ "$SECURE_BOOT" == "enabled" ]; then
-    echo ""
-    echo "⚠️ ════════════════════════════════════════════════════════"
-    echo "⚠️  ADVERTENCIA: Secure Boot está ACTIVADO"
-    echo "⚠️ ════════════════════════════════════════════════════════"
-    echo "⚠️  Los drivers NVIDIA requieren firma de módulos (MOK enrollment)."
-    echo "⚠️  La instalación automática se omitirá para evitar problemas."
-    echo "⚠️  Si desea instalar NVIDIA manualmente después:"
-    echo "⚠️    sudo apt install $NVIDIA_PKG nvidia-settings"
-    echo "⚠️    sudo mokutil --import /var/lib/dkms/mok.pub"
-    echo "⚠️    (Reiniciar y completar el registro MOK en la BIOS)"
-    echo "⚠️ ════════════════════════════════════════════════════════"
-    echo ""
-    read -r -p "¿Desea instalar NVIDIA de todos modos? [y/N] " response
-    if [[ "$response" =~ ^[Yy][Ee][Ss]$ ]] || [[ "$response" =~ ^[Yy]$ ]]; then
-      install_or_upgrade "NVIDIA (Recomendado: $NVIDIA_PKG)" "$NVIDIA_PKG" "nvidia-settings"
-    else
-      echo "ℹ️ Instalación de NVIDIA omitida por seguridad."
-    fi
-  else
-    install_or_upgrade "NVIDIA (Recomendado: $NVIDIA_PKG)" "$NVIDIA_PKG" "nvidia-settings"
-  fi
+  install_or_upgrade "NVIDIA (Recomendado)" "$NVIDIA_PKG" "nvidia-settings"
 fi
 
 # AMD: Paquetes oficiales (Nunca AMDGPU-PRO)
@@ -457,4 +444,10 @@ enable_service "cups"
 
 # Brave
 if ! dpkg -l brave-browser &>/dev/null | grep -q "^ii"; then
-  [ ! -f /usr/share/keyrings/brave-browser-archive-keyring.gpg ] && { curl -fsSLo /usr/share/keyri
+  [ ! -f /usr/share/keyrings/brave-browser-archive-keyring.gpg ] && { curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg; echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg arch=amd64] https://brave-browser-apt-release.s3.brave.com/ stable main" | tee /etc/apt/sources.list.d/brave-browser-release.list >/dev/null; }
+fi
+
+# Proton VPN (Método Oficial Dinámico)
+if ! dpkg -l proton-vpn-gnome-desktop &>/dev/null | grep -q "^ii" && ! dpkg -l protonvpn &>/dev/null | grep -q "^ii"; then
+  echo "   Descargando paquete de configuración oficial de ProtonVPN..."
+  PROTON_DEB_URL=$(curl -s "https://repo.protonvpn.com/debian/dists/stable/main/binary-all/" 2>/dev/
